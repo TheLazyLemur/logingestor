@@ -1,59 +1,39 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"log"
 	"net/http"
 
 	"logingestor/logingestor"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
-type Backends interface {
-	GetChan() *chan []byte
-	GetDB() *sql.DB
-}
-
-type backendsImpl struct {
-	logIngestionChannel chan []byte
-	db                  *sql.DB
-}
-
-func (b *backendsImpl) GetChan() chan []byte {
-	if b.logIngestionChannel == nil {
-		b.logIngestionChannel = make(chan []byte, 100)
-	}
-
-	return b.logIngestionChannel
-}
-
-func (b *backendsImpl) GetDB() *sql.DB {
-	if b.db == nil {
-		db, err := logingestor.SetupDB()
-		if err != nil {
-			panic("Failed to setup DB, cannot recover. err: " + err.Error())
-		}
-
-		b.db = db
-	}
-
-	return b.db
+func traceIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), "trace", uuid.New().String())
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func main() {
+	ctx := context.Background()
+
 	b := &backendsImpl{}
 	defer b.GetDB().Close()
-
 	defer close(b.GetChan())
 
-	r := http.NewServeMux()
+	r := chi.NewRouter()
+	r.Use(traceIDMiddleware)
 
-	r.HandleFunc("POST /", logingestor.LogIngestionHandler(b.GetChan()))
-	r.HandleFunc("GET /view", logingestor.LogViewHandler())
-	r.HandleFunc("GET /logs", logingestor.ListLogHandler(b.GetDB()))
+	r.Post("/", logingestor.LogIngestionHandler(b))
+	r.Get("/view", logingestor.LogViewHandler(b))
+	r.Get("/logs", logingestor.ListLogHandler(b))
 
-	go logingestor.ConsumeLogsForever(b.GetChan(), b.GetDB())
+	go logingestor.ConsumeLogsForever(ctx, b.GetChan(), b.GetDB())
 
 	log.Fatal(http.ListenAndServe(":3000", r))
 }

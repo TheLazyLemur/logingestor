@@ -11,7 +11,7 @@ templ layout() {
 			<script src="https://cdn.tailwindcss.com"></script>
 			<script src="https://unpkg.com/htmx.org@1.9.12"></script>
 		</head>
-		<body>
+		<body hx-boost="true">
 			{ children... }
 		</body>
 	</html>
@@ -19,16 +19,62 @@ templ layout() {
 
 templ Home() {
 	@layout() {
-		<button hx-target="#loglist" hx-get="/logs" hx-swap="beforeend">
-			Load Logs
-		</button>
+		<form hx-target="#loglist" hx-get="/logs" hx-swap="innerHTML">
+			<div class="flex space-x-2">
+				<div class="flex flex-col">
+					<label for="level">
+						Level
+					</label>
+					<input type="text" name="level" id="level" placeholder="Enter level"/>
+				</div>
+				<div class="flex flex-col">
+					<label for="message">
+						Message
+					</label>
+					<input type="text" name="message" id="message" placeholder="Enter message"/>
+				</div>
+				<div class="flex flex-col">
+					<label for="traceID">
+						Trace ID
+					</label>
+					<input type="text" name="traceID" id="traceID" placeholder="Enter trace ID"/>
+				</div>
+			</div>
+			<button type="submit">
+				Refresh
+			</button>
+		</form>
 		<div id="loglist" class=""></div>
 	}
+}
+
+templ Logs(logs []types.LogEntry) {
+	<div class="grid grid-cols-3">
+		<div>
+			Level
+		</div>
+		<div>
+			Message
+		</div>
+		<div>
+			Trace ID
+		</div>
+	</div>
+	<div class="grid grid-cols-3">
+		for _, log := range logs {
+			@LogEntry(log)
+		}
+	</div>
 }
 
 templ LogEntry(entry types.LogEntry) {
 	<div>
 		{ entry.Level }
+	</div>
+	<div>
 		{ entry.Message }
+	</div>
+	<div>
+		{ entry.TraceID }
 	</div>
 }

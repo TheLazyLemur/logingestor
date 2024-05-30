@@ -1,15 +1,13 @@
 package logingestor
 
 import (
-	"database/sql"
 	"io"
 	"log/slog"
-	"logingestor/logingestor/types"
 	"logingestor/logingestor/views"
 	"net/http"
 )
 
-func LogIngestionHandler(ch chan []byte) func(w http.ResponseWriter, r *http.Request) {
+func LogIngestionHandler(b backends) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -19,12 +17,12 @@ func LogIngestionHandler(ch chan []byte) func(w http.ResponseWriter, r *http.Req
 		}
 		defer r.Body.Close()
 
-		ch <- body
+		submitLog(b, body)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }
 
-func LogViewHandler() func(w http.ResponseWriter, r *http.Request) {
+func LogViewHandler(b backends) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := views.Home().Render(r.Context(), w); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -34,18 +32,19 @@ func LogViewHandler() func(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func ListLogHandler(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func ListLogHandler(b backends) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entries, err := GetLogs(db)
+		r.ParseForm()
+
+		message := r.FormValue("message")
+		traceID := r.FormValue("traceID")
+		level := r.FormValue("level")
+
+		entries, err := GetLogs(r.Context(), b, message, traceID, level)
 		if err != nil {
 			panic(err)
 		}
 
-		for _, entry := range entries {
-			views.LogEntry(types.LogEntry{
-				Level:   entry.Level,
-				Message: entry.Message,
-			}).Render(r.Context(), w)
-		}
+		views.Logs(entries).Render(r.Context(), w)
 	}
 }

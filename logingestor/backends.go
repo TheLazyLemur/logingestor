@@ -2,7 +2,7 @@ package logingestor
 
 import "database/sql"
 
-type Backends interface {
+type backends interface {
 	GetChan() chan []byte
 	GetDB() *sql.DB
 }

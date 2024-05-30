@@ -21,7 +21,7 @@ func main() {
 		for {
 			res, ok := <-ch
 			if !ok {
-				fmt.Println("UHM")
+				panic("channel closed")
 			}
 
 			results = append(results, res)
@@ -60,7 +60,6 @@ func main() {
 	}
 
 	wg.Wait()
-	fmt.Println(len(results))
 }
 
 func do(pl []byte, duration time.Duration) {

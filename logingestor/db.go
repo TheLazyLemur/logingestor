@@ -1,9 +1,8 @@
 package logingestor
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
-	"log"
 	"sync"
 
 	"logingestor/logingestor/types"
@@ -11,71 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func SetupDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file:example.db?mode=rwc")
-	if err != nil {
-		return nil, err
-	}
-
-	sqliteSettings := []string{
-		"PRAGMA journal_mode = WAL;",
-		"PRAGMA synchronous = NORMAL;",
-		"PRAGMA automatic_index = ON;",
-	}
-
-	for _, s := range sqliteSettings {
-		_, err = db.Exec(s)
-		if err != nil {
-			return nil, err
-		}
-	}
-	var journalMode string
-	err = db.QueryRow("PRAGMA journal_mode;").Scan(&journalMode)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if journalMode == "wal" {
-		fmt.Println("WAL mode is enabled.")
-	} else {
-		fmt.Println("WAL mode is not enabled.")
-	}
-
-	logTable := `
-	CREATE TABLE IF NOT EXISTS log_entries (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		level TEXT,
-		message TEXT,
-		resource_id TEXT,
-		timestamp TEXT,
-		trace_id TEXT,
-		span_id TEXT,
-		"commit" TEXT
-	);
-
-	CREATE TABLE IF NOT EXISTS log_metadata (
-		log_entry_id INTEGER,
-		key TEXT,
-		value TEXT,
-		FOREIGN KEY (log_entry_id) REFERENCES log_entries(id)
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_log_entries_resource_id ON log_entries(resource_id);
-	CREATE INDEX IF NOT EXISTS idx_log_entries_timestamp ON log_entries(timestamp);
-	CREATE INDEX IF NOT EXISTS idx_log_entries_trace_id ON log_entries(trace_id);
-	CREATE INDEX IF NOT EXISTS idx_log_entries_level ON log_entries(level);
-	CREATE INDEX IF NOT EXISTS idx_log_metadata_log_entry_id ON log_metadata(log_entry_id);
-	CREATE INDEX IF NOT EXISTS idx_log_metadata_key ON log_metadata(key);
-	CREATE INDEX IF NOT EXISTS idx_log_metadata_value ON log_metadata(value);
-	`
-	_, err = db.Exec(logTable)
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
-}
-
-func AddLog(tx *sql.Tx, logEntry types.LogEntry) error {
+func AddLog(ctx context.Context, tx *sql.Tx, logEntry types.LogEntry) error {
 	insertEntryQuery := `
 	INSERT INTO log_entries (level, message, resource_id, timestamp, trace_id, span_id, "commit") 
 	VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -101,13 +36,38 @@ func AddLog(tx *sql.Tx, logEntry types.LogEntry) error {
 	return nil
 }
 
-func getLogEntries(db *sql.DB) ([]types.LogEntry, error) {
+func getLogEntries(ctx context.Context, b backends, message string, traceID string, level string) ([]types.LogEntry, error) {
 	selectLogEntryQuery := `
-	SELECT * FROM log_entries;
+	SELECT * FROM log_entries
 	`
 
+	clauses := map[string]string{}
+	if message != "" {
+		clauses["message"] = "'" + message + "'"
+	}
+
+	if traceID != "" {
+		clauses["trace_id"] = "'" + traceID + "'"
+	}
+
+	if level != "" {
+		clauses["level"] = "'" + level + "'"
+	}
+
+	count := 0
+	for key, value := range clauses {
+		if count < 1 {
+			selectLogEntryQuery = selectLogEntryQuery + " WHERE " + key + " = " + value
+		} else {
+			selectLogEntryQuery = selectLogEntryQuery + " AND " + key + " = " + value
+		}
+		count++
+	}
+
+	selectLogEntryQuery = selectLogEntryQuery + " ORDER BY timestamp LIMIT 2000;"
+
 	var entries []types.LogEntry
-	rows, err := db.Query(selectLogEntryQuery)
+	rows, err := b.GetDB().QueryContext(ctx, selectLogEntryQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -124,17 +84,16 @@ func getLogEntries(db *sql.DB) ([]types.LogEntry, error) {
 		entries = append(entries, log)
 	}
 
-	fmt.Println("entries: ", len(entries))
 	return entries, nil
 }
 
-func getLogMetadata(db *sql.DB) ([]types.LogMetadata, error) {
+func getLogMetadata(ctx context.Context, db *sql.DB) ([]types.LogMetadata, error) {
 	selectLogEntryQuery := `
-	SELECT * FROM log_metadata;
+	SELECT * FROM log_metadata LIMIT 200000;
 	`
 
 	var entries []types.LogMetadata
-	rows, err := db.Query(selectLogEntryQuery)
+	rows, err := db.QueryContext(ctx, selectLogEntryQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -150,11 +109,10 @@ func getLogMetadata(db *sql.DB) ([]types.LogMetadata, error) {
 		entries = append(entries, log)
 	}
 
-	fmt.Println("entries: ", len(entries))
 	return entries, nil
 }
 
-func GetLogs(db *sql.DB) ([]types.LogEntry, error) {
+func GetLogs(ctx context.Context, b backends, message string, traceID string, level string) ([]types.LogEntry, error) {
 	errors := make(chan error, 1)
 	wg := sync.WaitGroup{}
 
@@ -162,7 +120,7 @@ func GetLogs(db *sql.DB) ([]types.LogEntry, error) {
 	var logEntries []types.LogEntry
 	go func() {
 		defer wg.Done()
-		entries, err := getLogEntries(db)
+		entries, err := getLogEntries(ctx, b, message, traceID, level)
 		if err != nil {
 			errors <- err
 		}
@@ -174,7 +132,7 @@ func GetLogs(db *sql.DB) ([]types.LogEntry, error) {
 	var logMetadataEntries []types.LogMetadata
 	go func() {
 		defer wg.Done()
-		entries, err := getLogMetadata(db)
+		entries, err := getLogMetadata(ctx, b.GetDB())
 		if err != nil {
 			errors <- err
 		}
@@ -189,8 +147,6 @@ func GetLogs(db *sql.DB) ([]types.LogEntry, error) {
 	for err := range errors {
 		if err != nil {
 			return nil, err
-		} else {
-			fmt.Println("worker completed successfully")
 		}
 	}
 

@@ -1,13 +1,18 @@
 package logingestor
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
 	"logingestor/logingestor/types"
 )
 
-func writeLog(message []byte, db *sql.DB) (err error) {
+func submitLog(b backends, message []byte) {
+	b.GetChan() <- message
+}
+
+func writeLog(ctx context.Context, message []byte, db *sql.DB) (err error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -28,7 +33,7 @@ func writeLog(message []byte, db *sql.DB) (err error) {
 
 	const maxRetries = 3
 	for retries := 0; retries <= maxRetries; retries++ {
-		if err = AddLog(tx, logEntry); err == nil {
+		if err = AddLog(ctx, tx, logEntry); err == nil {
 			break
 		}
 		if retries == maxRetries {
